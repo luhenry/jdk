@@ -679,6 +679,10 @@
   /* forEachRemaining support */                                                                                  \
   template(java_util_stream_StreamsRangeIntSpliterator,          "java/util/stream/Streams$RangeIntSpliterator")  \
                                                                                                                   \
+  /* UTF-8 <-> UTF-16 support */                                                                                  \
+  template(sun_nio_cs_UTF_8_Decoder,          "sun/nio/cs/UTF_8$Decoder")                                         \
+  template(sun_nio_cs_UTF_8_Encoder,          "sun/nio/cs/UTF_8$Encoder")                                         \
+                                                                                                                  \
   /* jfr signatures */                                                                                            \
   JFR_TEMPLATES(template)                                                                                         \
                                                                                                                   \

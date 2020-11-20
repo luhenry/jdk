@@ -25,6 +25,8 @@
 
 package sun.nio.cs;
 
+import jdk.internal.vm.annotation.IntrinsicCandidate;
+
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
@@ -218,6 +220,13 @@ public final class UTF_8 extends Unicode {
                    ? CoderResult.UNDERFLOW : CoderResult.OVERFLOW;
         }
 
+        @IntrinsicCandidate
+        private static void decodeArrayVectorized(char[] sa, int sp, int sl,
+                                                  byte[] da, int dp, int dl)
+        {
+            // do nothing, it's only for the intrinsic
+        }
+
         private CoderResult decodeArrayLoop(ByteBuffer src,
                                             CharBuffer dst)
         {
@@ -229,6 +238,11 @@ public final class UTF_8 extends Unicode {
             char[] da = dst.array();
             int dp = dst.arrayOffset() + dst.position();
             int dl = dst.arrayOffset() + dst.limit();
+
+            // arguments are passed by reference to intrinsic
+            decodeArrayVectorized(sa, sp, sl, da, dp, dl);
+            updatePositions(src, sp, dst, dp);
+
             int dlASCII = dp + Math.min(sl - sp, dl - dp);
 
             // ASCII only loop
@@ -451,6 +465,13 @@ public final class UTF_8 extends Unicode {
             return CoderResult.OVERFLOW;
         }
 
+        @IntrinsicCandidate
+        private static void encodeArrayVectorized(byte[] sa, int sp, int sl,
+                                                  char[] da, int dp, int dl)
+        {
+            // do nothing, it's only for the intrinsic
+        }
+
         private Surrogate.Parser sgp;
         private CoderResult encodeArrayLoop(CharBuffer src,
                                             ByteBuffer dst)
@@ -462,6 +483,11 @@ public final class UTF_8 extends Unicode {
             byte[] da = dst.array();
             int dp = dst.arrayOffset() + dst.position();
             int dl = dst.arrayOffset() + dst.limit();
+
+            // arguments are passed by reference to intrinsic
+            encodeArrayVectorized(sa, sp, sl, da, dp, dl);
+            updatePositions(src, sp, dst, dp);
+
             int dlASCII = dp + Math.min(sl - sp, dl - dp);
 
             // ASCII only loop

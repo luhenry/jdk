@@ -176,6 +176,10 @@ address StubRoutines::_dlibm_reduce_pi04l = NULL;
 address StubRoutines::_dlibm_tan_cot_huge = NULL;
 address StubRoutines::_dtan = NULL;
 
+address StubRoutines::_utf8_data = NULL;
+address StubRoutines::_utf8_decodeArrayVectorized = NULL;
+address StubRoutines::_utf8_encodeArrayVectorized = NULL;
+
 address StubRoutines::_safefetch32_entry                 = NULL;
 address StubRoutines::_safefetch32_fault_pc              = NULL;
 address StubRoutines::_safefetch32_continuation_pc       = NULL;

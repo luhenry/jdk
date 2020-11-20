@@ -928,6 +928,17 @@ void VM_Version::get_processor_features() {
     FLAG_SET_DEFAULT(UseBASE64Intrinsics, false);
   }
 
+  // UTF-8 <-> UTF-16 intrinsics
+  if ((UseSSE > 2)) {
+    if (FLAG_IS_DEFAULT(UseUTF8Intrinsics)) {
+      UseUTF8Intrinsics = true;
+    }
+  } else if (UseUTF8Intrinsics) {
+     if (!FLAG_IS_DEFAULT(UseUTF8Intrinsics))
+      warning("Base64 intrinsic requires SSE2+ instructions on this CPU");
+    FLAG_SET_DEFAULT(UseUTF8Intrinsics, false);
+  }
+
   if (supports_fma() && UseSSE >= 2) { // Check UseSSE since FMA code uses SSE instructions
     if (FLAG_IS_DEFAULT(UseFMA)) {
       UseFMA = true;

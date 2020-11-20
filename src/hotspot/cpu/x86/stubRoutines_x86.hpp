@@ -33,7 +33,7 @@ static bool returns_to_call_stub(address return_pc) { return return_pc == _call_
 
 enum platform_dependent_constants {
   code_size1 = 20000 LP64_ONLY(+10000),         // simply increase if too small (assembler will crash if too small)
-  code_size2 = 35300 LP64_ONLY(+25000)          // simply increase if too small (assembler will crash if too small)
+  code_size2 = 35300 LP64_ONLY(+25000+9*8*32768)          // simply increase if too small (assembler will crash if too small)
 };
 
 class x86 {
@@ -219,6 +219,8 @@ class x86 {
   static juint _ones[];
   static address _ones_adr;
 
+  static address _utf8_data_addr;
+
  public:
   static address verify_mxcsr_entry()    { return _verify_mxcsr_entry; }
   static address key_shuffle_mask_addr() { return _key_shuffle_mask_addr; }
@@ -237,6 +239,7 @@ class x86 {
   static address shuffle_byte_flip_mask_addr() { return _shuffle_byte_flip_mask_addr; }
   static address k256_addr()      { return _k256_adr; }
   static address method_entry_barrier() { return _method_entry_barrier; }
+  static address utf8_data_addr() { return _utf8_data_addr; }
 
   static address vector_short_to_byte_mask() {
     return _vector_short_to_byte_mask;

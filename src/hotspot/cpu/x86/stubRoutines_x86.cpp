@@ -98,6 +98,8 @@ address StubRoutines::x86::_Pi4x3_adr = NULL;
 address StubRoutines::x86::_Pi4x4_adr = NULL;
 address StubRoutines::x86::_ones_adr = NULL;
 
+address StubRoutines::x86::_utf8_data_addr = NULL;
+
 uint64_t StubRoutines::x86::_crc_by128_masks[] =
 {
   /* The fields in this structure are arranged so that they can be

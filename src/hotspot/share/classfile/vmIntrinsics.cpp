@@ -463,6 +463,10 @@ bool vmIntrinsics::disabled_by_jvm_flags(vmIntrinsics::ID id) {
   case vmIntrinsics::_copyMemory:
     if (!InlineArrayCopy || !InlineUnsafeOps) return true;
     break;
+  case vmIntrinsics::_utf8_decodeArrayVectorized:
+  case vmIntrinsics::_utf8_encodeArrayVectorized:
+    if (!UseUTF8Intrinsics) return true;
+    break;
 #ifdef COMPILER1
   case vmIntrinsics::_checkIndex:
     if (!InlineNIOCheckIndex) return true;

@@ -664,6 +664,11 @@ bool LibraryCallKit::try_to_inline(int predicate) {
   case vmIntrinsics::_getObjectSize:
     return inline_getObjectSize();
 
+  case vmIntrinsics::_utf8_decodeArrayVectorized:
+    return inline_utf8_decodeArrayVectorized();
+  case vmIntrinsics::_utf8_encodeArrayVectorized:
+    return inline_utf8_encodeArrayVectorized();
+
   default:
     // If you get here, it may be that someone has added a new intrinsic
     // to the list in vmSymbols.hpp without implementing it here.
@@ -6810,4 +6815,63 @@ bool LibraryCallKit::inline_getObjectSize() {
   }
 
   return true;
+}
+
+
+bool LibraryCallKit::inline_utf8_decodeArrayVectorized() {
+  assert(UseUTF8Intrinsics, "need UTF-8 intrinsics support");
+  assert(callee()->signature()->size() == 2, "utf8_decodeArrayVectorized has 2 parameters");
+
+  Node* src_array = argument(0); // type oop; src.array()
+  Node* src_pos = argument(1);   // type int; src.arrayOffset() + src.position()
+  Node* src_limit = argument(2); // type int; src.arrayOffset() + src.limit()
+  Node* dst_array = argument(3); // type oop; dst.array()
+  Node* dst_pos = argument(4);   // type ; dst.arrayOffset() + dst.position()
+  Node* dst_limit = argument(5); // type ; dst.arrayOffset() + dst.limit()
+
+  const Type* src_type = src_array->Value(&_gvn);
+  const TypeAryPtr* top_src = src_type->isa_aryptr();
+  if (top_src  == NULL || top_src->klass()  == NULL) {
+    // failed array check
+    return false;
+  }
+  const Type* dst_type = dst_array->Value(&_gvn);
+  const TypeAryPtr* top_dst = dst_type->isa_aryptr();
+  if (top_dst  == NULL || top_dst->klass()  == NULL) {
+    // failed array check
+    return false;
+  }
+  // Figure out the size and type of the elements we will be copying.
+  BasicType src_elem = src_type->isa_aryptr()->klass()->as_array_klass()->element_type()->basic_type();
+  if (src_elem != T_BYTE) {
+    return false;
+  }
+  // Figure out the size and type of the elements we will be copying.
+  BasicType dst_elem = src_type->isa_aryptr()->klass()->as_array_klass()->element_type()->basic_type();
+  if (dst_elem != T_CHAR) {
+    return false;
+  }
+
+  src_array = must_be_not_null(src_array, true);
+  dst_array = must_be_not_null(dst_array, true);
+
+  Node* src_start = array_element_address(src_array, 0, src_elem);
+  Node* dst_start = array_element_address(dst_array, 0, dst_elem);
+
+  address stubAddr = StubRoutines::utf8_decodeArrayVectorized();
+  const char *stubName = "utf8_decodeArrayVectorized";
+
+  assert(stubAddr != NULL, "Stub is generated");
+  if (stubAddr == NULL) return false;
+
+  // Call the stub.
+  Node* call = make_runtime_call(RC_LEAF|RC_NO_FP, OptoRuntime::utf8_decodeArrayVectorized_Type(),
+                                 stubAddr, stubName, TypePtr::BOTTOM,
+                                 src_start, src_pos, src_limit, dst_start, dst_pos, dst_limit);
+
+  return true;
+}
+
+bool LibraryCallKit::inline_utf8_encodeArrayVectorized() {
+  return false;
 }

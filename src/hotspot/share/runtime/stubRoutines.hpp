@@ -257,6 +257,10 @@ class StubRoutines: AllStatic {
   static address _dlibm_tan_cot_huge;
   static address _dtan;
 
+  static address _utf8_data;
+  static address _utf8_decodeArrayVectorized;
+  static address _utf8_encodeArrayVectorized;
+
   // Safefetch stubs.
   static address _safefetch32_entry;
   static address _safefetch32_fault_pc;
@@ -438,6 +442,9 @@ class StubRoutines: AllStatic {
   static address dlibm_sin_cos_huge()  { return _dlibm_sin_cos_huge; }
   static address dlibm_tan_cot_huge()  { return _dlibm_tan_cot_huge; }
   static address dtan()                { return _dtan; }
+
+  static address utf8_decodeArrayVectorized() { return _utf8_decodeArrayVectorized; }
+  static address utf8_encodeArrayVectorized() { return _utf8_encodeArrayVectorized; }
 
   static address select_fill_function(BasicType t, bool aligned, const char* &name);
 

@@ -915,6 +915,14 @@ class methodHandle;
   do_intrinsic(_VectorRebox, jdk_internal_vm_vector_VectorSupport, vector_rebox_name, vector_rebox_sig, F_S)                                   \
    do_alias(vector_rebox_sig, object_object_signature)                                                                                         \
    do_name(vector_rebox_name, "maybeRebox")                                                                                                    \
+                                                                                                                        \
+  /* UTF-8 <-> UTF-16 support */                                                                                        \
+  do_intrinsic(_utf8_decodeArrayVectorized, sun_nio_cs_UTF_8_Decoder, utf8_decodeArrayVectorized, utf8_decodeArrayVectorized_sig, F_S) \
+   do_signature(utf8_decodeArrayVectorized_sig, "(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;)V")                        \
+   do_name(utf8_decodeArrayVectorized, "decodeArrayVectorized")                                                         \
+  do_intrinsic(_utf8_encodeArrayVectorized, sun_nio_cs_UTF_8_Encoder, utf8_encodeArrayVectorized, utf8_encodeArrayVectorized_sig, F_S) \
+   do_signature(utf8_encodeArrayVectorized_sig, "(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;)V")                        \
+   do_name(utf8_encodeArrayVectorized, "encodeArrayVectorized")                                                         \
                                                                                                                                                \
                                                                                                                                \
    /* (2) Bytecode intrinsics                                                                        */                        \
@@ -1034,7 +1042,7 @@ class vmIntrinsics : AllStatic {
     #undef __IGNORE_ALIAS
 
     ID_LIMIT,
-    LAST_COMPILER_INLINE = _VectorScatterOp,
+    LAST_COMPILER_INLINE = _utf8_encodeArrayVectorized,
     FIRST_MH_SIG_POLY    = _invokeGeneric,
     FIRST_MH_STATIC      = _linkToVirtual,
     LAST_MH_SIG_POLY     = _linkToInterface,

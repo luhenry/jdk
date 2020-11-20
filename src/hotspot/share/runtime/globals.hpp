@@ -242,6 +242,9 @@ const intx ObjectAlignmentInBytes = 8;
   product(bool, UseBASE64Intrinsics, false,                                 \
           "Use intrinsics for java.util.Base64")                            \
                                                                             \
+  product(bool, UseUTF8Intrinsics, false,                                   \
+          "Use intrinsics for sun.nio.cs.UTF_8")                            \
+                                                                            \
   product(size_t, LargePageSizeInBytes, 0,                                  \
           "Large page size (0 to let VM choose the page size)")             \
           range(0, max_uintx)                                               \

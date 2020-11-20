@@ -1193,6 +1193,51 @@ const TypeFunc* OptoRuntime::base64_decodeBlock_Type() {
   return TypeFunc::make(domain, range);
 }
 
+//-----------------------------------------------------------------------------
+// UTF-8 <-> UTF-16 support
+
+/*
+ * static void decodeArrayVectorized(ByteBuffer src, CharBuffer dst)
+ */
+const TypeFunc* OptoRuntime::utf8_decodeArrayVectorized_Type() {
+  // create input type (domain)
+  int num_args = 2;
+  int argcnt = num_args;
+  const Type** fields = TypeTuple::fields(argcnt);
+  int argp = TypeFunc::Parms;
+  fields[argp++] = TypePtr::NOTNULL; // src
+  fields[argp++] = TypePtr::NOTNULL; // dst
+  assert(argp == TypeFunc::Parms+argcnt, "correct decoding");
+  const TypeTuple* domain = TypeTuple::make(TypeFunc::Parms+argcnt, fields);
+
+  // no result type needed
+  fields = TypeTuple::fields(1);
+  fields[TypeFunc::Parms+0] = NULL; // void
+  const TypeTuple* range = TypeTuple::make(TypeFunc::Parms, fields);
+  return TypeFunc::make(domain, range);
+}
+
+/*
+ * static void encodeArrayVectorized(CharBuffer src, ByteBuffer dst)
+ */
+const TypeFunc* OptoRuntime::utf8_encodeArrayVectorized_Type() {
+  // create input type (domain)
+  int num_args = 2;
+  int argcnt = num_args;
+  const Type** fields = TypeTuple::fields(argcnt);
+  int argp = TypeFunc::Parms;
+  fields[argp++] = TypePtr::NOTNULL; // dst
+  fields[argp++] = TypePtr::NOTNULL; // src
+  assert(argp == TypeFunc::Parms+argcnt, "correct decoding");
+  const TypeTuple* domain = TypeTuple::make(TypeFunc::Parms+argcnt, fields);
+
+  // no result type needed
+  fields = TypeTuple::fields(1);
+  fields[TypeFunc::Parms+0] = NULL; // void
+  const TypeTuple* range = TypeTuple::make(TypeFunc::Parms, fields);
+  return TypeFunc::make(domain, range);
+}
+
 //------------- Interpreter state access for on stack replacement
 const TypeFunc* OptoRuntime::osr_end_Type() {
   // create input type (domain)

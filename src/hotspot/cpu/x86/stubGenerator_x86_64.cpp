@@ -5790,6 +5790,181 @@ address generate_avx_ghash_processBlocks() {
       return start;
   }
 
+  // struct utf8_data {
+  //   jlong shufAB_1; jlong shufAB_2;                 //shuffling mask to get lower two bytes of symbols
+  //   jlong shufC_1; jlong shufC_2;                   //shuffling mask to get third bytes of symbols
+  //   jlong header_mask_1; jlong header_mask_2;       //mask of "111..10" bits required in each byte
+  //   jlong min_values_1; jlong min_values_2;         //minimal value allowed for not being overlong (sign-shifted, 16-bit)
+  //   jint src_step;                                  //number of bytes processed in input buffer
+  //   jint dst_step;                                  //number of symbols produced in output buffer (doubled)
+  // };
+
+  void emit_utf8_data(jlong shufAB_1, jlong shufAB_2,
+                      jlong shufC_1, jlong shufC_2,
+                      jlong header_mask_1, jlong header_mask_2,
+                      jlong min_values_1, jlong min_values_2,
+                      jint src_step, jint dst_step) {
+    __ emit_data64(shufAB_1, relocInfo::none);
+    __ emit_data64(shufAB_2, relocInfo::none);
+    __ emit_data64(shufC_1, relocInfo::none);
+    __ emit_data64(shufC_2, relocInfo::none);
+    __ emit_data64(header_mask_1, relocInfo::none);
+    __ emit_data64(header_mask_2, relocInfo::none);
+    __ emit_data64(min_values_1, relocInfo::none);
+    __ emit_data64(min_values_2, relocInfo::none);
+    __ emit_data(src_step, relocInfo::none, 0);
+    __ emit_data(dst_step, relocInfo::none, 0);
+  }
+
+  void compute_utf8_data_entry(int *sizes, int num) {
+
+  }
+
+  void compute_utf8_data_recursive(int *sizes, int num, int total) {
+    if (total >= 16) {
+      compute_utf8_data_entry(sizes, num);
+      return;
+    }
+    for (int size = 1; size <= 3; size++) {
+      sizes[num] = size;
+      compute_utf8_data_recursive(sizes, num + 1, total + size);
+    }
+  }
+
+  address generate_utf8_data_addr() {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "utf8_data");
+    address start = __ pc();
+    __ emit_data64(0xc0c0c0c0c0c0c0c0, relocInfo::none); // 0
+    __ emit_data64(0xc0c0c0c0c0c0c0c0, relocInfo::none);
+    __ emit_data64(0x8080808080808080, relocInfo::none); // 1
+    __ emit_data64(0x8080808080808080, relocInfo::none);
+    __ emit_data64(0x007f007f007f007f, relocInfo::none); // 2
+    __ emit_data64(0x007f007f007f007f, relocInfo::none);
+    __ emit_data64(0x3f003f003f003f00, relocInfo::none); // 3
+    __ emit_data64(0x3f003f003f003f00, relocInfo::none);
+    __ emit_data64(0x6000600060006000, relocInfo::none); // 4
+    __ emit_data64(0x6000600060006000, relocInfo::none);
+    __ emit_data64(0x77ff77ff77ff77ff, relocInfo::none); // 5
+    __ emit_data64(0x77ff77ff77ff77ff, relocInfo::none);
+    __ emit_data64(0x8000800080008000, relocInfo::none); // 6
+    __ emit_data64(0x8000800080008000, relocInfo::none);
+
+    for (int i = 0; i < 32768; i++) {
+      emit_utf8_data(-1, -1,
+                     -1, -1,
+                     -1, -1,
+                     -1, -1,
+                     -1, -1);
+    }
+
+    int sizes[32];
+    compute_utf8_data_recursive(sizes, 0, 0);
+
+    return start;
+  }
+
+  address generate_utf8_decodeArrayVectorized() {
+    assert (UseUTF8Intrinsics, "need SSE3");
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "utf8_decodeArrayVectorized");
+
+    address start = __ pc();
+    const Register src_array = c_rarg0;
+    const Register src_pos = c_rarg1;
+    const Register src_limit = c_rarg2;
+    const Register dst_array = c_rarg3;
+    const Register dst_pos = c_rarg4;
+    const Register dst_limit = c_rarg5;
+
+    BLOCK_COMMENT("Entry:");
+    __ enter(); // required for proper stackwalking of RuntimeStub frame
+
+    Label L_loop, L_exit;
+
+    BLOCK_COMMENT("L_loop:");
+    __ BIND(L_loop);
+
+    // if src_pos + 16 >= src_limit : goto L_exit;
+    __ movl(rax, src_pos);
+    __ addl(rax, 16);
+    __ cmpl(rax, src_limit);
+    __ jcc(Assembler::aboveEqual, L_exit);
+    // if dst_pos + 8 >= dst_limit : goto L_exit;
+    __ movl(rcx, src_pos);
+    __ addl(rcx, 8);
+    __ cmpl(rcx, dst_limit);
+    __ jcc(Assembler::aboveEqual, L_exit);
+
+    const int xmm_size = 2 * wordSize; /* AVX_128bit; */
+
+    const Register lookup   = rdx;
+    const XMMRegister bytes = xmm0;
+    const XMMRegister rAB   = xmm1;
+    const XMMRegister rC    = xmm2;
+    const XMMRegister sum   = xmm3;
+
+    __ movdqu(bytes, Address(src_array, src_pos, Address::times_1));
+    __ movptr(rscratch1, ExternalAddress(StubRoutines::x86::utf8_data_addr() + 0 * xmm_size)); // 0xc0
+    __ movdqa(xmm4, Address(rscratch1, 0));
+    __ pand(xmm4, bytes);
+    __ movptr(rscratch2, ExternalAddress(StubRoutines::x86::utf8_data_addr() + 1 * xmm_size)); // 0x80
+    __ movdqa(xmm5, Address(rscratch2, 0));
+    __ pcmpeqb(xmm4, xmm5);
+    __ pmovmskb(rscratch1, xmm4);
+    __ shrl(rscratch1, 1);
+    __ movptr(rscratch2, ExternalAddress(StubRoutines::x86::utf8_data_addr() + 7 * xmm_size));
+    __ lea(lookup, Address(rscratch1, rscratch2, Address::times_1));
+
+    __ movdqa(xmm6, Address(lookup, xmm_size * 0));
+    __ movdqa(rAB, bytes);
+    __ pshufb(rAB, xmm6);
+    __ movdqa(xmm7, Address(lookup, xmm_size * 1));
+    __ movdqa(rC, bytes);
+    __ pshufb(rC, xmm7);
+    __ movptr(rscratch1, ExternalAddress(StubRoutines::x86::utf8_data_addr() + 2 * xmm_size)); // 0x007f
+    __ movdqa(xmm8, Address(rscratch1, 0));
+    __ pand(xmm8, rAB);
+    __ movptr(rscratch1, ExternalAddress(StubRoutines::x86::utf8_data_addr() + 3 * xmm_size)); // 0x3f00
+    __ movdqa(xmm9, Address(rscratch1, 0));
+    __ pand(xmm9, rAB);
+    __ psrlw(xmm9, 2);
+    __ movdqa(xmm10, rC);
+    __ psllw(xmm10, 12);
+    __ movdqa(sum, xmm8);
+    __ paddw(sum, xmm9);
+    __ paddw(sum, xmm10);
+
+    __ movdqu(Address(dst_array, dst_pos, Address::times_1), sum);
+    __ addl(src_pos, Address(lookup, xmm_size * 4 + 0));
+    __ addl(dst_pos, Address(lookup, xmm_size * 4 + 4));
+
+    __ jmp(L_loop);
+
+    BLOCK_COMMENT("L_exit:");
+    __ BIND(L_exit);
+
+    __ leave(); // required for proper stackwalking of RuntimeStub frame
+    __ ret(0);
+
+    return start;
+  }
+
+  address generate_utf8_encodeArrayVectorized() {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "utf8_encodeArrayVectorized");
+
+    address start = __ pc();
+
+    BLOCK_COMMENT("Entry:");
+    __ enter(); // required for proper stackwalking of RuntimeStub frame
+
+    __ leave(); // required for proper stackwalking of RuntimeStub frame
+    __ ret(0);
+
+    return start;
+  }
+
   /**
    *  Arguments:
    *
@@ -6938,6 +7113,12 @@ address generate_avx_ghash_processBlocks() {
       StubRoutines::x86::_left_shift_mask = base64_left_shift_mask_addr();
       StubRoutines::x86::_right_shift_mask = base64_right_shift_mask_addr();
       StubRoutines::_base64_encodeBlock = generate_base64_encodeBlock();
+    }
+
+    if (UseUTF8Intrinsics) {
+      StubRoutines::x86::_utf8_data_addr = generate_utf8_data_addr();
+      StubRoutines::_utf8_decodeArrayVectorized = generate_utf8_decodeArrayVectorized();
+      StubRoutines::_utf8_encodeArrayVectorized = generate_utf8_encodeArrayVectorized();
     }
 
     BarrierSetNMethod* bs_nm = BarrierSet::barrier_set()->barrier_set_nmethod();

@@ -650,6 +650,8 @@ bool C2Compiler::is_intrinsic_supported(const methodHandle& method, bool is_virt
   case vmIntrinsics::_isCompileConstant:
   case vmIntrinsics::_Preconditions_checkIndex:
   case vmIntrinsics::_getObjectSize:
+  case vmIntrinsics::_utf8_decodeArrayVectorized:
+  case vmIntrinsics::_utf8_encodeArrayVectorized:
     break;
 
   case vmIntrinsics::_VectorUnaryOp:

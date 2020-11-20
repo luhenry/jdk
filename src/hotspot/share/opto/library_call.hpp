@@ -328,6 +328,9 @@ class LibraryCallKit : public GraphKit {
   Node* unbox_vector(Node* in, const TypeInstPtr* vbox_type, BasicType bt, int num_elem, bool shuffle_to_vector = false);
   Node* shift_count(Node* cnt, int shift_op, BasicType bt, int num_elem);
 
+  bool inline_utf8_decodeArrayVectorized();
+  bool inline_utf8_encodeArrayVectorized();
+
   enum VectorMaskUseType {
     VecMaskUseLoad,
     VecMaskUseStore,
