@@ -1421,6 +1421,7 @@ public class KeyStore {
      *          algorithm could not be found
      * @throws    CertificateException if any of the certificates included in
      *          the keystore data could not be stored
+     * @throws    UnsupportedOperationException if this operation is not supported
      *
      * @since 1.5
      */
@@ -1960,13 +1961,13 @@ public class KeyStore {
             if ((type == null) || (file == null) || (protection == null)) {
                 throw new NullPointerException();
             }
-            if ((protection instanceof PasswordProtection == false) &&
-                (protection instanceof CallbackHandlerProtection == false)) {
+            if (!(protection instanceof PasswordProtection) &&
+                !(protection instanceof CallbackHandlerProtection)) {
                 throw new IllegalArgumentException
                 ("Protection must be PasswordProtection or " +
                  "CallbackHandlerProtection");
             }
-            if (file.isFile() == false) {
+            if (!file.isFile()) {
                 throw new IllegalArgumentException
                     ("File does not exist or it does not refer " +
                      "to a normal file: " + file);
@@ -2055,7 +2056,7 @@ public class KeyStore {
                 PrivilegedExceptionAction<KeyStore> action =
                         new PrivilegedExceptionAction<KeyStore>() {
                     public KeyStore run() throws Exception {
-                        if (protection instanceof CallbackHandlerProtection == false) {
+                        if (!(protection instanceof CallbackHandlerProtection)) {
                             return run0();
                         }
                         // when using a CallbackHandler,
@@ -2189,7 +2190,7 @@ public class KeyStore {
                             ks = KeyStore.getInstance(type, provider);
                         }
                         LoadStoreParameter param = new SimpleLoadStoreParameter(protection);
-                        if (protection instanceof CallbackHandlerProtection == false) {
+                        if (!(protection instanceof CallbackHandlerProtection)) {
                             ks.load(param);
                         } else {
                             // when using a CallbackHandler,

@@ -108,7 +108,6 @@ public class SecureClassLoader extends ClassLoader {
      *         doesn't allow creation of a class loader.
      *
      * @since 9
-     * @spec JPMS
      */
     protected SecureClassLoader(String name, ClassLoader parent) {
         super(name, parent);
@@ -255,18 +254,10 @@ public class SecureClassLoader extends ClassLoader {
                 return true;
             }
 
-            if (!(obj instanceof CodeSourceKey)) {
-                return false;
-            }
-
-            CodeSourceKey csk = (CodeSourceKey) obj;
-
-            if (!Objects.equals(cs.getLocationNoFragString(),
-                                csk.cs.getLocationNoFragString())) {
-                return false;
-            }
-
-            return cs.matchCerts(csk.cs, true);
+            return obj instanceof CodeSourceKey other
+                    && Objects.equals(cs.getLocationNoFragString(),
+                                other.cs.getLocationNoFragString())
+                    && cs.matchCerts(other.cs, true);
         }
     }
 

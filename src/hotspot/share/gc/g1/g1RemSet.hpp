@@ -39,8 +39,8 @@
 
 class BitMap;
 class CardTableBarrierSet;
-class G1BlockOffsetTable;
 class CodeBlobClosure;
+class G1AbstractSubTask;
 class G1CollectedHeap;
 class G1CMBitMap;
 class G1HotCardCache;
@@ -48,7 +48,9 @@ class G1RemSetScanState;
 class G1ParScanThreadState;
 class G1ParScanThreadStateSet;
 class G1Policy;
+class G1RemSetSamplingTask;
 class G1ScanCardClosure;
+class G1ServiceThread;
 class HeapRegionClaimer;
 
 // A G1RemSet in which each heap region has a rem set that records the
@@ -65,8 +67,11 @@ private:
   G1CardTable*           _ct;
   G1Policy*              _g1p;
   G1HotCardCache*        _hot_card_cache;
+  G1RemSetSamplingTask*  _sampling_task;
 
   void print_merge_heap_roots_stats();
+
+  void assert_scan_top_is_null(uint hrm_index) NOT_DEBUG_RETURN;
 public:
 
   typedef CardTable::CardValue CardValue;
@@ -78,6 +83,12 @@ public:
            G1CardTable* ct,
            G1HotCardCache* hot_card_cache);
   ~G1RemSet();
+
+  // Initialize and schedule young remembered set sampling task.
+  void initialize_sampling_task(G1ServiceThread* thread);
+
+  // Accumulated vtime used by the sampling task.
+  double sampling_task_vtime();
 
   // Scan all cards in the non-collection set regions that potentially contain
   // references into the current whole collection set.
@@ -96,8 +107,9 @@ public:
   // Prepare for and cleanup after scanning the heap roots. Must be called
   // once before and after in sequential code.
   void prepare_for_scan_heap_roots();
-  // Cleans the card table from temporary duplicate detection information.
-  void cleanup_after_scan_heap_roots();
+  // Creates a gang task for cleaining up temporary data structures and the
+  // card table, removing temporary duplicate detection information.
+  G1AbstractSubTask* create_cleanup_after_scan_heap_roots_task();
   // Excludes the given region from heap root scanning.
   void exclude_region_from_scan(uint region_idx);
   // Creates a snapshot of the current _top values at the start of collection to

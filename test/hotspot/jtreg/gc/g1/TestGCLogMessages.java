@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,12 +33,13 @@ package gc.g1;
  * @modules java.base/jdk.internal.misc
  *          java.management
  * @build sun.hotspot.WhiteBox
- * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *                   gc.g1.TestGCLogMessages
  */
 
 import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.Platform;
 import jdk.test.lib.process.ProcessTools;
 import sun.hotspot.code.Compiler;
 
@@ -126,11 +127,10 @@ public class TestGCLogMessages {
         new LogMessageWithLevel("JNI Global Roots", Level.TRACE),
         new LogMessageWithLevel("VM Global Roots", Level.TRACE),
         // Redirty Cards
-        new LogMessageWithLevel("Redirty Cards", Level.DEBUG),
-        new LogMessageWithLevel("Parallel Redirty", Level.TRACE),
-        new LogMessageWithLevel("Redirtied Cards", Level.TRACE),
+        new LogMessageWithLevel("Redirty Logged Cards", Level.DEBUG),
+        new LogMessageWithLevel("Redirtied Cards", Level.DEBUG),
         // Misc Top-level
-        new LogMessageWithLevel("Code Roots Purge", Level.DEBUG),
+        new LogMessageWithLevel("Purge Code Roots", Level.DEBUG),
         new LogMessageWithLevel("String Deduplication", Level.DEBUG),
         new LogMessageWithLevel("Queue Fixup", Level.DEBUG),
         new LogMessageWithLevel("Table Fixup", Level.DEBUG),
@@ -141,7 +141,6 @@ public class TestGCLogMessages {
         // Free CSet
         new LogMessageWithLevel("Free Collection Set", Level.DEBUG),
         new LogMessageWithLevel("Serial Free Collection Set", Level.TRACE),
-        new LogMessageWithLevel("Parallel Free Collection Set", Level.TRACE),
         new LogMessageWithLevel("Young Free Collection Set", Level.TRACE),
         new LogMessageWithLevel("Non-Young Free Collection Set", Level.TRACE),
         // Rebuild Free List
@@ -149,8 +148,6 @@ public class TestGCLogMessages {
         new LogMessageWithLevel("Serial Rebuild Free List", Level.TRACE),
         new LogMessageWithLevel("Parallel Rebuild Free List", Level.TRACE),
 
-        // Humongous Eager Reclaim
-        new LogMessageWithLevel("Humongous Reclaim", Level.DEBUG),
         // Merge PSS
         new LogMessageWithLevel("Merge Per-Thread State", Level.DEBUG),
         // TLAB handling
@@ -165,7 +162,7 @@ public class TestGCLogMessages {
         new LogMessageWithLevel("ResolvedMethodTable Weak", Level.DEBUG),
         new LogMessageWithLevel("VM Weak", Level.DEBUG),
 
-        new LogMessageWithLevelC2OrJVMCIOnly("DerivedPointerTable Update", Level.DEBUG),
+        new LogMessageWithLevelC2OrJVMCIOnly("Update Derived Pointers", Level.DEBUG),
         new LogMessageWithLevel("Start New Collection Set", Level.DEBUG),
     };
 
@@ -182,7 +179,9 @@ public class TestGCLogMessages {
     public static void main(String[] args) throws Exception {
         new TestGCLogMessages().testNormalLogs();
         new TestGCLogMessages().testConcurrentRefinementLogs();
-        new TestGCLogMessages().testWithToSpaceExhaustionLogs();
+        if (Platform.isDebugBuild()) {
+          new TestGCLogMessages().testWithEvacuationFailureLogs();
+        }
         new TestGCLogMessages().testWithConcurrentStart();
         new TestGCLogMessages().testExpandHeap();
     }
@@ -235,17 +234,20 @@ public class TestGCLogMessages {
     }
 
     LogMessageWithLevel exhFailureMessages[] = new LogMessageWithLevel[] {
-        new LogMessageWithLevel("Evacuation Failure", Level.DEBUG),
-        new LogMessageWithLevel("Recalculate Used", Level.TRACE),
-        new LogMessageWithLevel("Remove Self Forwards", Level.TRACE),
+        new LogMessageWithLevel("Recalculate Used Memory", Level.DEBUG),
+        new LogMessageWithLevel("Restore Preserved Marks", Level.DEBUG),
+        new LogMessageWithLevel("Remove Self Forwards", Level.DEBUG),
     };
 
-    private void testWithToSpaceExhaustionLogs() throws Exception {
+    private void testWithEvacuationFailureLogs() throws Exception {
         ProcessBuilder pb = ProcessTools.createJavaProcessBuilder("-XX:+UseG1GC",
                                                                   "-Xmx32M",
                                                                   "-Xmn16M",
+                                                                  "-XX:+G1EvacuationFailureALot",
+                                                                  "-XX:G1EvacuationFailureALotCount=100",
+                                                                  "-XX:G1EvacuationFailureALotInterval=1",
                                                                   "-Xlog:gc+phases=debug",
-                                                                  GCTestWithToSpaceExhaustion.class.getName());
+                                                                  GCTestWithEvacuationFailure.class.getName());
 
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         checkMessagesAtLevel(output, exhFailureMessages, Level.DEBUG);
@@ -254,8 +256,9 @@ public class TestGCLogMessages {
         pb = ProcessTools.createJavaProcessBuilder("-XX:+UseG1GC",
                                                    "-Xmx32M",
                                                    "-Xmn16M",
+                                                   "-Xms32M",
                                                    "-Xlog:gc+phases=trace",
-                                                   GCTestWithToSpaceExhaustion.class.getName());
+                                                   GCTestWithEvacuationFailure.class.getName());
 
         output = new OutputAnalyzer(pb.start());
         checkMessagesAtLevel(output, exhFailureMessages, Level.TRACE);
@@ -304,16 +307,19 @@ public class TestGCLogMessages {
         }
     }
 
-    static class GCTestWithToSpaceExhaustion {
+    static class GCTestWithEvacuationFailure {
         private static byte[] garbage;
         private static byte[] largeObject;
+        private static Object[] holder = new Object[200]; // Must be larger than G1EvacuationFailureALotCount
+
         public static void main(String [] args) {
             largeObject = new byte[16*1024*1024];
             System.out.println("Creating garbage");
-            // create 128MB of garbage. This should result in at least one GC,
-            // some of them with to-space exhaustion.
-            for (int i = 0; i < 1024; i++) {
-                garbage = new byte[128 * 1024];
+            // Create 16 MB of garbage. This should result in at least one GC,
+            // (Heap size is 32M, we use 17MB for the large object above)
+            // which is larger than G1EvacuationFailureALotInterval.
+            for (int i = 0; i < 16 * 1024; i++) {
+                holder[i % holder.length] = new byte[1024];
             }
             System.out.println("Done");
         }

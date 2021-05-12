@@ -24,6 +24,7 @@
 
 #include "precompiled.hpp"
 #include "gc/g1/g1BarrierSet.hpp"
+#include "gc/g1/g1BatchedGangTask.hpp"
 #include "gc/g1/g1BlockOffsetTable.inline.hpp"
 #include "gc/g1/g1CardTable.inline.hpp"
 #include "gc/g1/g1CardTableEntryClosure.hpp"
@@ -35,8 +36,10 @@
 #include "gc/g1/g1GCPhaseTimes.hpp"
 #include "gc/g1/g1HotCardCache.hpp"
 #include "gc/g1/g1OopClosures.inline.hpp"
+#include "gc/g1/g1Policy.hpp"
 #include "gc/g1/g1RootClosures.hpp"
 #include "gc/g1/g1RemSet.hpp"
+#include "gc/g1/g1ServiceThread.hpp"
 #include "gc/g1/g1SharedDirtyCardQueue.hpp"
 #include "gc/g1/g1_globals.hpp"
 #include "gc/g1/heapRegion.inline.hpp"
@@ -55,6 +58,7 @@
 #include "runtime/os.hpp"
 #include "utilities/align.hpp"
 #include "utilities/globalDefinitions.hpp"
+#include "utilities/powerOfTwo.hpp"
 #include "utilities/stack.inline.hpp"
 #include "utilities/ticks.hpp"
 
@@ -215,7 +219,7 @@ private:
   // entries from free or archive regions.
   HeapWord** _scan_top;
 
-  class G1ClearCardTableTask : public AbstractGangTask {
+  class G1ClearCardTableTask : public G1AbstractSubTask {
     G1CollectedHeap* _g1h;
     G1DirtyRegions* _regions;
     uint _chunk_length;
@@ -229,7 +233,7 @@ private:
                          G1DirtyRegions* regions,
                          uint chunk_length,
                          G1RemSetScanState* scan_state) :
-      AbstractGangTask("G1 Clear Card Table Task"),
+      G1AbstractSubTask(G1GCPhaseTimes::ClearCardTable),
       _g1h(g1h),
       _regions(regions),
       _chunk_length(chunk_length),
@@ -239,9 +243,27 @@ private:
       assert(chunk_length > 0, "must be");
     }
 
+    double worker_cost() const override {
+      uint num_regions = _regions->size();
+
+      if (num_regions == 0) {
+        // There is no card table clean work, only some cleanup of memory.
+        return AlmostNoWork;
+      }
+      return ((double)align_up((size_t)num_regions << HeapRegion::LogCardsPerRegion, chunk_size()) / chunk_size());
+    }
+
+
+    virtual ~G1ClearCardTableTask() {
+      _scan_state->cleanup();
+#ifndef PRODUCT
+      G1CollectedHeap::heap()->verifier()->verify_card_table_cleanup();
+#endif
+    }
+
     static uint chunk_size() { return M; }
 
-    void work(uint worker_id) {
+    void do_work(uint worker_id) override {
       while (_cur_dirty_regions < _regions->size()) {
         uint next = Atomic::fetch_and_add(&_cur_dirty_regions, _chunk_length);
         uint max = MIN2(next + _chunk_length, _regions->size());
@@ -256,38 +278,13 @@ private:
     }
   };
 
-  // Clear the card table of "dirty" regions.
-  void clear_card_table(WorkGang* workers) {
-    uint num_regions = _all_dirty_regions->size();
-
-    if (num_regions == 0) {
-      return;
-    }
-
-    uint const num_chunks = (uint)(align_up((size_t)num_regions << HeapRegion::LogCardsPerRegion, G1ClearCardTableTask::chunk_size()) / G1ClearCardTableTask::chunk_size());
-    uint const num_workers = MIN2(num_chunks, workers->active_workers());
-    uint const chunk_length = G1ClearCardTableTask::chunk_size() / (uint)HeapRegion::CardsPerRegion;
-
-    // Iterate over the dirty cards region list.
-    G1ClearCardTableTask cl(G1CollectedHeap::heap(), _all_dirty_regions, chunk_length, this);
-
-    log_debug(gc, ergo)("Running %s using %u workers for %u "
-                        "units of work for %u regions.",
-                        cl.name(), num_workers, num_chunks, num_regions);
-    workers->run_task(&cl, num_workers);
-
-#ifndef PRODUCT
-    G1CollectedHeap::heap()->verifier()->verify_card_table_cleanup();
-#endif
-  }
-
 public:
   G1RemSetScanState() :
     _max_reserved_regions(0),
     _collection_set_iter_state(NULL),
     _card_table_scan_state(NULL),
     _scan_chunks_per_region(get_chunks_per_region(HeapRegion::LogOfHRGrainBytes)),
-    _log_scan_chunks_per_region(log2_uint(_scan_chunks_per_region)),
+    _log_scan_chunks_per_region(log2i(_scan_chunks_per_region)),
     _region_scan_chunks(NULL),
     _num_total_scan_chunks(0),
     _scan_chunks_shift(0),
@@ -311,7 +308,7 @@ public:
     _num_total_scan_chunks = max_reserved_regions * _scan_chunks_per_region;
     _region_scan_chunks = NEW_C_HEAP_ARRAY(bool, _num_total_scan_chunks, mtGC);
 
-    _scan_chunks_shift = (uint8_t)log2_intptr(HeapRegion::CardsPerRegion / _scan_chunks_per_region);
+    _scan_chunks_shift = (uint8_t)log2i(HeapRegion::CardsPerRegion / _scan_chunks_per_region);
     _scan_top = NEW_C_HEAP_ARRAY(HeapWord*, max_reserved_regions, mtGC);
   }
 
@@ -388,9 +385,13 @@ public:
     }
   }
 
-  void cleanup(WorkGang* workers) {
-    clear_card_table(workers);
+  G1AbstractSubTask* create_cleanup_after_scan_heap_roots_task() {
+    uint const chunk_length = G1ClearCardTableTask::chunk_size() / (uint)HeapRegion::CardsPerRegion;
 
+    return new G1ClearCardTableTask(G1CollectedHeap::heap(), _all_dirty_regions, chunk_length, this);
+  }
+
+  void cleanup() {
     delete _all_dirty_regions;
     _all_dirty_regions = NULL;
 
@@ -480,6 +481,118 @@ public:
   }
 };
 
+class G1YoungRemSetSamplingClosure : public HeapRegionClosure {
+  SuspendibleThreadSetJoiner* _sts;
+  size_t _regions_visited;
+  size_t _sampled_rs_length;
+public:
+  G1YoungRemSetSamplingClosure(SuspendibleThreadSetJoiner* sts) :
+    HeapRegionClosure(), _sts(sts), _regions_visited(0), _sampled_rs_length(0) { }
+
+  virtual bool do_heap_region(HeapRegion* r) {
+    size_t rs_length = r->rem_set()->occupied();
+    _sampled_rs_length += rs_length;
+
+    // Update the collection set policy information for this region
+    G1CollectedHeap::heap()->collection_set()->update_young_region_prediction(r, rs_length);
+
+    _regions_visited++;
+
+    if (_regions_visited == 10) {
+      if (_sts->should_yield()) {
+        _sts->yield();
+        // A gc may have occurred and our sampling data is stale and further
+        // traversal of the collection set is unsafe
+        return true;
+      }
+      _regions_visited = 0;
+    }
+    return false;
+  }
+
+  size_t sampled_rs_length() const { return _sampled_rs_length; }
+};
+
+// Task handling young gen remembered set sampling.
+class G1RemSetSamplingTask : public G1ServiceTask {
+  // Helper to account virtual time.
+  class VTimer {
+    double _start;
+  public:
+    VTimer() : _start(os::elapsedVTime()) { }
+    double duration() { return os::elapsedVTime() - _start; }
+  };
+
+  double _vtime_accum;  // Accumulated virtual time.
+  void update_vtime_accum(double duration) {
+    _vtime_accum += duration;
+  }
+
+  // Sample the current length of remembered sets for young.
+  //
+  // At the end of the GC G1 determines the length of the young gen based on
+  // how much time the next GC can take, and when the next GC may occur
+  // according to the MMU.
+  //
+  // The assumption is that a significant part of the GC is spent on scanning
+  // the remembered sets (and many other components), so this thread constantly
+  // reevaluates the prediction for the remembered set scanning costs, and potentially
+  // G1Policy resizes the young gen. This may do a premature GC or even
+  // increase the young gen size to keep pause time length goal.
+  void sample_young_list_rs_length(SuspendibleThreadSetJoiner* sts){
+    G1CollectedHeap* g1h = G1CollectedHeap::heap();
+    G1Policy* policy = g1h->policy();
+    VTimer vtime;
+
+    if (policy->use_adaptive_young_list_length()) {
+      G1YoungRemSetSamplingClosure cl(sts);
+
+      G1CollectionSet* g1cs = g1h->collection_set();
+      g1cs->iterate(&cl);
+
+      if (cl.is_complete()) {
+        policy->revise_young_list_target_length_if_necessary(cl.sampled_rs_length());
+      }
+    }
+    update_vtime_accum(vtime.duration());
+  }
+
+  // There is no reason to do the sampling if a GC occurred recently. We use the
+  // G1ConcRefinementServiceIntervalMillis as the metric for recently and calculate
+  // the diff to the last GC. If the last GC occurred longer ago than the interval
+  // 0 is returned.
+  jlong reschedule_delay_ms() {
+    Tickspan since_last_gc = G1CollectedHeap::heap()->time_since_last_collection();
+    jlong delay = (jlong) (G1ConcRefinementServiceIntervalMillis - since_last_gc.milliseconds());
+    return MAX2<jlong>(0L, delay);
+  }
+
+public:
+  G1RemSetSamplingTask(const char* name) : G1ServiceTask(name) { }
+  virtual void execute() {
+    SuspendibleThreadSetJoiner sts;
+
+    // Reschedule if a GC happened too recently.
+    jlong delay_ms = reschedule_delay_ms();
+    if (delay_ms > 0) {
+      schedule(delay_ms);
+      return;
+    }
+
+    // Do the actual sampling.
+    sample_young_list_rs_length(&sts);
+    schedule(G1ConcRefinementServiceIntervalMillis);
+  }
+
+  double vtime_accum() {
+    // Only report vtime if supported by the os.
+    if (!os::supports_vtime()) {
+      return 0.0;
+    }
+    return _vtime_accum;
+  }
+};
+
 G1RemSet::G1RemSet(G1CollectedHeap* g1h,
                    G1CardTable* ct,
                    G1HotCardCache* hot_card_cache) :
@@ -488,15 +601,28 @@ G1RemSet::G1RemSet(G1CollectedHeap* g1h,
   _g1h(g1h),
   _ct(ct),
   _g1p(_g1h->policy()),
-  _hot_card_cache(hot_card_cache) {
+  _hot_card_cache(hot_card_cache),
+  _sampling_task(NULL) {
 }
 
 G1RemSet::~G1RemSet() {
   delete _scan_state;
+  delete _sampling_task;
 }
 
 void G1RemSet::initialize(uint max_reserved_regions) {
   _scan_state->initialize(max_reserved_regions);
+}
+
+void G1RemSet::initialize_sampling_task(G1ServiceThread* thread) {
+  assert(_sampling_task == NULL, "Sampling task already initialized");
+  _sampling_task = new G1RemSetSamplingTask("Remembered Set Sampling Task");
+  thread->register_task(_sampling_task);
+}
+
+double G1RemSet::sampling_task_vtime() {
+  assert(_sampling_task != NULL, "Must have been initialized");
+  return _sampling_task->vtime_accum();
 }
 
 // Helper class to scan and detect ranges of cards that need to be scanned on the
@@ -906,14 +1032,27 @@ void G1RemSet::scan_collection_set_regions(G1ParScanThreadState* pss,
   }
 }
 
-void G1RemSet::prepare_region_for_scan(HeapRegion* region) {
-  uint hrm_index = region->hrm_index();
+#ifdef ASSERT
+void G1RemSet::assert_scan_top_is_null(uint hrm_index) {
+  assert(_scan_state->scan_top(hrm_index) == NULL,
+         "scan_top of region %u is unexpectedly " PTR_FORMAT,
+         hrm_index, p2i(_scan_state->scan_top(hrm_index)));
+}
+#endif
 
-  if (region->is_old_or_humongous_or_archive()) {
-    _scan_state->set_scan_top(hrm_index, region->top());
+void G1RemSet::prepare_region_for_scan(HeapRegion* r) {
+  uint hrm_index = r->hrm_index();
+
+  // Only update non-collection set old regions, others must have already been set
+  // to NULL (don't scan) in the initialization.
+  if (r->in_collection_set()) {
+    assert_scan_top_is_null(hrm_index);
+  } else if (r->is_old_or_humongous_or_archive()) {
+    _scan_state->set_scan_top(hrm_index, r->top());
   } else {
-    assert(region->in_collection_set() || region->is_free(),
-           "Should only be free or in the collection set at this point %s", region->get_type_str());
+    assert_scan_top_is_null(hrm_index);
+    assert(r->is_free(),
+           "Region %u should be free region but is %s", hrm_index, r->get_type_str());
   }
 }
 
@@ -1168,7 +1307,7 @@ public:
     // We schedule flushing the remembered sets of humongous fast reclaim candidates
     // onto the card table first to allow the remaining parallelized tasks hide it.
     if (_initial_evacuation &&
-        p->fast_reclaim_humongous_candidates() > 0 &&
+        g1h->has_humongous_reclaim_candidates() &&
         !_fast_reclaim_handled &&
         !Atomic::cmpxchg(&_fast_reclaim_handled, false, true)) {
 
@@ -1279,19 +1418,14 @@ void G1RemSet::exclude_region_from_scan(uint region_idx) {
   _scan_state->clear_scan_top(region_idx);
 }
 
-void G1RemSet::cleanup_after_scan_heap_roots() {
-  G1GCPhaseTimes* phase_times = _g1h->phase_times();
-
-  // Set all cards back to clean.
-  double start = os::elapsedTime();
-  _scan_state->cleanup(_g1h->workers());
-  phase_times->record_clear_ct_time((os::elapsedTime() - start) * 1000.0);
+G1AbstractSubTask* G1RemSet::create_cleanup_after_scan_heap_roots_task() {
+  return _scan_state->create_cleanup_after_scan_heap_roots_task();
 }
 
 inline void check_card_ptr(CardTable::CardValue* card_ptr, G1CardTable* ct) {
 #ifdef ASSERT
   G1CollectedHeap* g1h = G1CollectedHeap::heap();
-  assert(g1h->is_in_exact(ct->addr_for(card_ptr)),
+  assert(g1h->is_in(ct->addr_for(card_ptr)),
          "Card at " PTR_FORMAT " index " SIZE_FORMAT " representing heap at " PTR_FORMAT " (%u) must be in committed heap",
          p2i(card_ptr),
          ct->index_for(ct->addr_for(card_ptr)),
@@ -1552,8 +1686,8 @@ class G1RebuildRemSetTask: public AbstractGangTask {
         // Step to the next live object within the MemRegion if needed.
         if (is_live(_current)) {
           // Non-objArrays were scanned by the previous part of that region.
-          if (_current < mr.start() && !oop(_current)->is_objArray()) {
-            _current += oop(_current)->size();
+          if (_current < mr.start() && !cast_to_oop(_current)->is_objArray()) {
+            _current += cast_to_oop(_current)->size();
             // We might have positioned _current on a non-live object. Reposition to the next
             // live one if needed.
             move_if_below_tams();
@@ -1574,7 +1708,7 @@ class G1RebuildRemSetTask: public AbstractGangTask {
       }
 
       oop next() const {
-        oop result = oop(_current);
+        oop result = cast_to_oop(_current);
         assert(is_live(_current),
                "Object " PTR_FORMAT " must be live TAMS " PTR_FORMAT " below %d mr " PTR_FORMAT " " PTR_FORMAT " outside %d",
                p2i(_current), p2i(_tams), _tams > _current, p2i(_mr.start()), p2i(_mr.end()), _mr.contains(result));
@@ -1598,7 +1732,7 @@ class G1RebuildRemSetTask: public AbstractGangTask {
       size_t marked_words = 0;
 
       if (hr->is_humongous()) {
-        oop const humongous_obj = oop(hr->humongous_start_region()->bottom());
+        oop const humongous_obj = cast_to_oop(hr->humongous_start_region()->bottom());
         if (is_humongous_live(humongous_obj, bitmap, top_at_mark_start, top_at_rebuild_start)) {
           // We need to scan both [bottom, TAMS) and [TAMS, top_at_rebuild_start);
           // however in case of humongous objects it is sufficient to scan the encompassing
@@ -1680,7 +1814,7 @@ public:
                                         "TAMS " PTR_FORMAT " "
                                         "TARS " PTR_FORMAT,
                                         region_idx,
-                                        _cm->liveness(region_idx) * HeapWordSize,
+                                        _cm->live_bytes(region_idx),
                                         time.seconds() * 1000.0,
                                         marked_bytes,
                                         p2i(hr->bottom()),

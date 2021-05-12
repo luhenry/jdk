@@ -191,13 +191,6 @@ class ConcurrentHashTable : public CHeapObj<F> {
     Bucket* get_bucket(size_t idx) { return &_buckets[idx]; }
   };
 
-  // Used as default functor when no functor supplied for some methods.
-  struct NoOp {
-    void operator()(VALUE*) {}
-    const VALUE& operator()() {}
-    void operator()(bool, VALUE*) {}
-  } noOp;
-
   // For materializing a supplied value.
   class LazyValueRetrieve {
    private:
@@ -299,6 +292,7 @@ class ConcurrentHashTable : public CHeapObj<F> {
   void internal_shrink_epilog(Thread* thread);
   void internal_shrink_range(Thread* thread, size_t start, size_t stop);
   bool internal_shrink(Thread* thread, size_t size_limit_log2);
+  void internal_reset(size_t log2_size);
 
   // Methods for growing.
   bool unzip_bucket(Thread* thread, InternalTable* old_table,
@@ -395,6 +389,10 @@ class ConcurrentHashTable : public CHeapObj<F> {
   // Re-size operations.
   bool shrink(Thread* thread, size_t size_limit_log2 = 0);
   bool grow(Thread* thread, size_t size_limit_log2 = 0);
+  // Unsafe reset and resize the table. This method assumes that we
+  // want to clear and maybe resize the internal table without the
+  // overhead of clearing individual items in the table.
+  void unsafe_reset(size_t size_log2 = 0);
 
   // All callbacks for get are under critical sections. Other callbacks may be
   // under critical section or may have locked parts of table. Calling any
@@ -429,7 +427,10 @@ class ConcurrentHashTable : public CHeapObj<F> {
   // Same without DELETE_FUNC.
   template <typename LOOKUP_FUNC>
   bool remove(Thread* thread, LOOKUP_FUNC& lookup_f) {
-    return internal_remove(thread, lookup_f, noOp);
+    struct {
+      void operator()(VALUE*) {}
+    } ignore_del_f;
+    return internal_remove(thread, lookup_f, ignore_del_f);
   }
 
   // Visit all items with SCAN_FUNC if no concurrent resize. Takes the resize

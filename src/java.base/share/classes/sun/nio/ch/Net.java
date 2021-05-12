@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -226,29 +226,31 @@ public class Net {
     /**
      * Returns the local address after performing a SecurityManager#checkConnect.
      */
-    static InetSocketAddress getRevealedLocalAddress(InetSocketAddress addr) {
+    static InetSocketAddress getRevealedLocalAddress(SocketAddress sa) {
+        InetSocketAddress isa = (InetSocketAddress) sa;
         SecurityManager sm = System.getSecurityManager();
-        if (addr == null || sm == null)
-            return addr;
-
-        try{
-            sm.checkConnect(addr.getAddress().getHostAddress(), -1);
-            // Security check passed
-        } catch (SecurityException e) {
-            // Return loopback address only if security check fails
-            addr = getLoopbackAddress(addr.getPort());
+        if (isa != null && sm != null) {
+            try {
+                sm.checkConnect(isa.getAddress().getHostAddress(), -1);
+            } catch (SecurityException e) {
+                // Return loopback address only if security check fails
+                isa = getLoopbackAddress(isa.getPort());
+            }
         }
-        return addr;
+        return isa;
     }
 
-    static String getRevealedLocalAddressAsString(InetSocketAddress addr) {
-        return System.getSecurityManager() == null ? addr.toString() :
-                getLoopbackAddress(addr.getPort()).toString();
+    static String getRevealedLocalAddressAsString(SocketAddress sa) {
+        InetSocketAddress isa = (InetSocketAddress) sa;
+        if (System.getSecurityManager() == null) {
+            return isa.toString();
+        } else {
+            return getLoopbackAddress(isa.getPort()).toString();
+        }
     }
 
     private static InetSocketAddress getLoopbackAddress(int port) {
-        return new InetSocketAddress(InetAddress.getLoopbackAddress(),
-                                     port);
+        return new InetSocketAddress(InetAddress.getLoopbackAddress(), port);
     }
 
     private static final InetAddress anyLocalInet4Address;
@@ -574,6 +576,13 @@ public class Net {
         return connect0(preferIPv6, fd, remote, remotePort);
     }
 
+    static int connect(ProtocolFamily family, FileDescriptor fd, SocketAddress remote)
+        throws IOException
+    {
+        InetSocketAddress isa = (InetSocketAddress) remote;
+        return connect(family, fd, isa.getAddress(), isa.getPort());
+    }
+
     private static native int connect0(boolean preferIPv6,
                                        FileDescriptor fd,
                                        InetAddress remote,
@@ -670,6 +679,10 @@ public class Net {
      */
     static native int sendOOB(FileDescriptor fd, byte data) throws IOException;
 
+    /**
+     * Read and discard urgent data (MSG_OOB) on the socket.
+     */
+    static native boolean discardOOB(FileDescriptor fd) throws IOException;
 
     // -- Multicast support --
 
