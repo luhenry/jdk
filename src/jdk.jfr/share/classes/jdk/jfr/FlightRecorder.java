@@ -315,6 +315,21 @@ public final class FlightRecorder {
         return PlatformRecorder.removeListener(changeListener);
     }
 
+    public static void addFilter(EventFilter filter) {
+        Objects.requireNonNull(filter);
+        if (JVMSupport.isNotAvailable()) {
+            return;
+        }
+        
+    }
+
+    public static boolean removeFilter(EventFilter filter) {
+        Objects.requireNonNull(filter);
+        if (JVMSupport.isNotAvailable()) {
+            return false;
+        }
+    }
+
     /**
      * Returns {@code true} if the Java Virtual Machine (JVM) has Flight Recorder capabilities.
      * <p>

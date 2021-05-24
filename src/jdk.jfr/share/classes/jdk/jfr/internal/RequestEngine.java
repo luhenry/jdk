@@ -100,6 +100,7 @@ public final class RequestEngine {
     }
 
     private static final List<RequestHook> entries = new CopyOnWriteArrayList<>();
+    private static final List<EventFilter> filters = new CopyOnWriteArrayList<>();
     private static long lastTimeMillis;
     private static long flushInterval = Long.MAX_VALUE;
     private static long streamDelta;
@@ -167,6 +168,38 @@ public final class RequestEngine {
             logHook("Added", rh.type);
         }
         entries.addAll(newEntries);
+    }
+
+    static void addFilter(EventFilter filter) {
+        for (EventFilter f : filters) {
+            if (f == filter) {
+                throw new IllegalArgumentException("Filter has already been added");
+            }
+        }
+        // Insertion takes O(2*n), could be O(1) with HashMap, but
+        // thinking is that CopyOnWriteArrayList is faster
+        // to iterate over, which will happen more over time.
+        filters.add(filter);
+        logFilter("Added");
+    }
+
+    static boolean removeFilter(EventFilter filter) {
+        for (EventFilter f : filters) {
+            if (f == filter) {
+                filters.remove(f);
+                logFilter("Removed");
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void logFilter(String action) {
+        if (type.isSystem()) {
+            Logger.log(LogTag.JFR_SYSTEM, LogLevel.INFO, action + " filter");
+        } else {
+            Logger.log(LogTag.JFR, LogLevel.INFO, action + " filter");
+        }
     }
 
     static void doChunkEnd() {
