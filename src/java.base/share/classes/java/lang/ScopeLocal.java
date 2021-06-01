@@ -162,7 +162,7 @@ public final class ScopeLocal<T> {
         final short primaryBits, secondaryBits;
         final SingleBinding inheritables, nonInheritables;
 
-       Carrier(SingleBinding inheritables, SingleBinding nonInheritables, short primaryBits, short secondaryBits) {
+        Carrier(SingleBinding inheritables, SingleBinding nonInheritables, short primaryBits, short secondaryBits) {
             this.inheritables = inheritables;
             this.nonInheritables = nonInheritables;
             this.primaryBits = primaryBits;
@@ -235,16 +235,8 @@ public final class ScopeLocal<T> {
          */
         public final <R> R call(Callable<R> op) throws Exception {
             Objects.requireNonNull(op);
-            Cache.invalidate(primaryBits | secondaryBits);
-            var inheritables = addScopeLocalBindings(this.inheritables, primaryBits,true);
-            var nonInheritables = addScopeLocalBindings(this.nonInheritables, primaryBits,false);
-            try {
+            try (final var c = context()) {
                 return op.call();
-            } finally {
-                Thread currentThread = Thread.currentThread();
-                currentThread.noninheritableScopeLocalBindings = nonInheritables;
-                currentThread.inheritableScopeLocalBindings = inheritables;
-                Cache.invalidate(primaryBits | secondaryBits);
             }
         }
 
@@ -277,29 +269,52 @@ public final class ScopeLocal<T> {
          */
         public final void run(Runnable op) {
             Objects.requireNonNull(op);
-            Cache.invalidate(primaryBits | secondaryBits);
-            var inheritables = addScopeLocalBindings(this.inheritables, primaryBits,true);
-            var nonInheritables = addScopeLocalBindings(this.nonInheritables, primaryBits,false);
-            try {
+            try (final var c = context()) {
                 op.run();
-            } finally {
-                Thread currentThread = Thread.currentThread();
-                currentThread.noninheritableScopeLocalBindings = nonInheritables;
-                currentThread.inheritableScopeLocalBindings = inheritables;
-                Cache.invalidate(primaryBits | secondaryBits);
             }
         }
 
-        /*
-         * Add a list of bindings to the current Thread's set of bound values.
+        /**
+         * Returns a Context for the current Carrier
+         *
+         * @return the context
          */
-        private final static Snapshot addScopeLocalBindings(SingleBinding bindings, short primaryBits, boolean isInheritable) {
-            Snapshot prev = getScopeLocalBindings(isInheritable);
-            if (bindings != null) {
-                var b = new Snapshot(bindings, prev, primaryBits);
-                ScopeLocal.setScopeLocalBindings(b, isInheritable);
+        public final Context context() {
+            return new Context(this);
+        }
+
+        /**
+         * A Context is a wrapper for the current carrier 
+         */
+        public static final class Context implements AutoCloseable {
+            final Carrier carrier;
+            final Snapshot inheritables, nonInheritables;
+
+            Context(Carrier carrier) {
+                this.carrier = carrier;
+                Cache.invalidate(carrier.primaryBits | carrier.secondaryBits);
+                this.inheritables = addScopeLocalBindings(carrier.inheritables, carrier.primaryBits, true);
+                this.nonInheritables = addScopeLocalBindings(carrier.nonInheritables, carrier.primaryBits, false);
             }
-            return prev;
+
+            /*
+            * Add a list of bindings to the current Thread's set of bound values.
+            */
+            private final static Snapshot addScopeLocalBindings(SingleBinding bindings, short primaryBits, boolean isInheritable) {
+                Snapshot prev = getScopeLocalBindings(isInheritable);
+                if (bindings != null) {
+                    var b = new Snapshot(bindings, prev, primaryBits);
+                    ScopeLocal.setScopeLocalBindings(b, isInheritable);
+                }
+                return prev;
+            }
+
+            public final void close() {
+                Thread currentThread = Thread.currentThread();
+                currentThread.inheritableScopeLocalBindings = inheritables;
+                currentThread.noninheritableScopeLocalBindings = nonInheritables;
+                Cache.invalidate(carrier.primaryBits | carrier.secondaryBits);
+            }
         }
     }
 
